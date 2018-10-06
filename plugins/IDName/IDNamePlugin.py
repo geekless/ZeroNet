@@ -9,25 +9,18 @@ allow_reload = False  # No reload supported
 
 log = logging.getLogger("IDNamePlugin")
 
-
-@PluginManager.registerTo("SiteManager")
-class SiteManagerPlugin(object):
+class IDNameResolver(object):
     __site_zeroid = None
     __db_domains = None
     __db_domains_modified = None
 
-    def load(self, *args, **kwargs):
-        super(SiteManagerPlugin, self).load(*args, **kwargs)
-        if not self.get(config.zeroid_resolver):
-            self.need(config.zeroid_resolver)
+    def __init__(self, site_manager, zeroid_address):
+        self.site_manager = site_manager
+        self.zeroid_address = zeroid_address
 
-    # Checks if it's a valid address
-    def isAddress(self, address):
-        return self.isIDDomain(address) or super(SiteManagerPlugin, self).isAddress(address)
-
-    # Return: True if the address is domain
-    def isDomain(self, address):
-        return self.isIDDomain(address) or super(SiteManagerPlugin, self).isDomain(address)
+    def load(self):
+        if not self.site_manager.get(self.zeroid_address):
+            self.site_manager.need(self.zeroid_address)
 
     # Return: True if the address is .zeroid domain
     def isIDDomain(self, address):
@@ -78,7 +71,7 @@ class SiteManagerPlugin(object):
     def resolveIDDomain(self, domain):
         domain = domain.lower()
         if not self.__site_zeroid:
-            self.__site_zeroid = self.need(config.zeroid_resolver)
+            self.__site_zeroid = self.site_manager.need(self.zeroid_address)
 
         site_zeroid_modified = self.__site_zeroid.content_manager.contents.get("content.json", {}).get("modified", 0)
         if not self.__db_domains or self.__db_domains_modified != site_zeroid_modified:
@@ -89,12 +82,35 @@ class SiteManagerPlugin(object):
             self.__db_domains[domain] = self.resolveDomainNoCache(domain)
         return self.__db_domains.get(domain)
 
+
+@PluginManager.registerTo("SiteManager")
+class SiteManagerPlugin(object):
+
+    __idnameResolver = None
+
+    def idnameResolver(self):
+        if not self.__idnameResolver:
+            self.__idnameResolver = IDNameResolver(self, config.zeroid_resolver)
+        return self.__idnameResolver
+
+    def load(self, *args, **kwargs):
+        super(SiteManagerPlugin, self).load(*args, **kwargs)
+        self.idnameResolver().load()
+
+    # Checks if it's a valid address
+    def isAddress(self, address):
+        return self.idnameResolver().isIDDomain(address) or super(SiteManagerPlugin, self).isAddress(address)
+
+    # Return: True if the address is domain
+    def isDomain(self, address):
+        return self.idnameResolver().isIDDomain(address) or super(SiteManagerPlugin, self).isDomain(address)
+
     # Return or create site and start download site files
     # Return: Site or None if dns resolve failed
     def need(self, address, *args, **kwargs):
         log.info("need: domain: %s" % address)
-        if self.isIDDomain(address):  # Its looks like a domain
-            address_resolved = self.resolveIDDomain(address)
+        if self.idnameResolver().isIDDomain(address):  # Its looks like a domain
+            address_resolved = self.idnameResolver().resolveIDDomain(address)
             log.info("need: address_resolved: %s", address_resolved)
             if address_resolved:
                 address = address_resolved
@@ -108,8 +124,8 @@ class SiteManagerPlugin(object):
         if not self.loaded:  # Not loaded yet
             self.load()
         log.info("get: domain: %s" % address)
-        if self.isIDDomain(address):  # Its looks like a domain
-            address_resolved = self.resolveIDDomain(address)
+        if self.idnameResolver().isIDDomain(address):  # Its looks like a domain
+            address_resolved = self.idnameResolver().resolveIDDomain(address)
             log.info("get: address_resolved: %s", address_resolved)
             if address_resolved:  # Domain found
                 site = self.sites.get(address_resolved)
@@ -138,7 +154,7 @@ class UiRequestPlugin(object):
         match = re.match("/media/(?P<address>[A-Za-z0-9-]+\.[A-Za-z0-9\.-]+)(?P<inner_path>/.*|$)", path)
         if match:  # Its a valid domain, resolve first
             domain = match.group("address")
-            address = self.site_manager.resolveIDDomain(domain)
+            address = self.site_manager.idnameResolver().resolveIDDomain(domain)
             if address:
                 path = "/media/" + address + match.group("inner_path")
         return super(UiRequestPlugin, self).actionSiteMedia(path, **kwargs)  # Get the wrapper frame output
