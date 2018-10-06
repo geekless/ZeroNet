@@ -10,13 +10,37 @@ allow_reload = False  # No reload supported
 log = logging.getLogger("IDNamePlugin")
 
 class IDNameResolver(object):
-    __site_zeroid = None
-    __db_domains = None
-    __db_domains_modified = None
+    cache = None
+    site_zeroid = None
 
     def __init__(self, site_manager, zeroid_address):
         self.site_manager = site_manager
         self.zeroid_address = zeroid_address
+
+    def lookupCache(self, domain):
+        if not self.cache:
+            self.cache = {}
+
+        if not self.cache.has_key(domain):
+            return None
+
+        valid = False
+
+        provider_modified = self.cache[domain]["provider_modified"]
+        provider_address = self.cache[domain]["provider_address"]
+        provider = self.site_manager.get(provider_address)
+        if provider and provider.content_manager:
+            modified = provider.content_manager.contents.get("content.json", {}).get("modified", 0)
+            if modified == provider_modified:
+                valid = True
+
+        if not valid:
+            self.cache[domain] = None
+
+        return self.cache.get(domain)
+
+    def saveInCache(self, entry):
+        self.cache[entry["domain"]] = entry
 
     def load(self):
         if not self.site_manager.get(self.zeroid_address):
@@ -29,18 +53,18 @@ class IDNameResolver(object):
     def getDataFileList(self):
         return filter(
             lambda x: re.match("data/.*\.json$", x),
-            self.__site_zeroid.content_manager.contents.get("content.json", {}).get("files", {}).keys()
+            self.site_zeroid.content_manager.contents.get("content.json", {}).get("files", {}).keys()
         )
 
-    def resolveDomainFromFile(self, domain, file_name, allow_recursion = True):
-        log.info("resolveDomainFromFile: %s" % file_name)
-        self.__site_zeroid.needFile(file_name, priority=10)
+    def resolveIDDomainFromFile(self, domain, file_name, allow_recursion = True):
+        log.info("resolveIDDomainFromFile: %s" % file_name)
+        self.site_zeroid.needFile(file_name, priority=10)
 
         r = re.search("(.*?)([A-Za-z0-9_-]+)\.zeroid$", domain)
         subdomain = r.group(1)
         user_id = r.group(2)
 
-        data = self.__site_zeroid.storage.loadJson(file_name)
+        data = self.site_zeroid.storage.loadJson(file_name)
         certs  = data.get("users", data.get("certs"))
         if not certs:
             return None
@@ -52,16 +76,16 @@ class IDNameResolver(object):
         if cert.startswith("@") and allow_recursion:
             r = cert[1:].split(',')
             cert_file_name = "data/certs_%s.json" % r[0]
-            return self.resolveDomainFromFile(domain, cert_file_name, allow_recursion = False)
+            return self.resolveIDDomainFromFile(domain, cert_file_name, allow_recursion = False)
 
         r = cert.split(',')
         return r[1]
 
-    def resolveDomainNoCache(self, domain):
+    def resolveIDDomainNoCache(self, domain):
         log.info(self.getDataFileList())
 
         for data_file_name in self.getDataFileList():
-            r = self.resolveDomainFromFile(domain, data_file_name)
+            r = self.resolveIDDomainFromFile(domain, data_file_name)
             if r:
                 return r
         return None
@@ -70,17 +94,19 @@ class IDNameResolver(object):
     # Return: The address or None
     def resolveIDDomain(self, domain):
         domain = domain.lower()
-        if not self.__site_zeroid:
-            self.__site_zeroid = self.site_manager.need(self.zeroid_address)
+        if not self.site_zeroid:
+            self.site_zeroid = self.site_manager.need(self.zeroid_address)
 
-        site_zeroid_modified = self.__site_zeroid.content_manager.contents.get("content.json", {}).get("modified", 0)
-        if not self.__db_domains or self.__db_domains_modified != site_zeroid_modified:
-            self.__db_domains = {}
-            self.__db_domains_modified = site_zeroid_modified
+        entry = self.lookupCache(domain)
+        if not entry:
+            entry = {}
+            entry["domain"] = domain
+            entry["address"] = self.resolveIDDomainNoCache(domain)
+            entry["provider_address"] = self.zeroid_address
+            entry["provider_modified"] = self.site_zeroid.content_manager.contents.get("content.json", {}).get("modified", 0)
+            self.saveInCache(entry)
 
-        if not self.__db_domains.has_key(domain):
-            self.__db_domains[domain] = self.resolveDomainNoCache(domain)
-        return self.__db_domains.get(domain)
+        return entry["address"]
 
 
 @PluginManager.registerTo("SiteManager")
