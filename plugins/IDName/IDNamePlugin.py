@@ -27,12 +27,13 @@ class IDNameResolver(object):
         if not self.cache:
             self.cache = {}
 
-        if not self.cache.has_key(domain):
+        entry = self.cache.get(domain)
+        if not entry:
             return None
 
-        timestamp = self.cache[domain].get("timestamp", 0)
-        provider_modified = self.cache[domain].get("provider_modified", 0)
-        provider_address = self.cache[domain].get("provider_address", None)
+        timestamp = entry.get("timestamp", 0)
+        provider_modified = entry.get("provider_modified", 0)
+        provider_address = entry.get("provider_address", None)
         valid = False
 
         current_time = time.time()
