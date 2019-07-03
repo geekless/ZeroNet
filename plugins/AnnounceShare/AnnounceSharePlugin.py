@@ -1,3 +1,4 @@
+import random
 import time
 import os
 import logging
@@ -74,6 +75,17 @@ class TrackerStorage(object):
 
         supported_trackers = self.site_announcer.getSupportedTrackers()
 
+        # If a tracker is in our list, but is absent from the results of getSupportedTrackers(),
+        # it seems to be supported by software, but forbidden by the settings or network configuration.
+        # We check and remove thoose trackers here, since onTrackerError() is never emitted for them.
+        trackers = self.getTrackers()
+        for tracker_address, tracker in list(trackers.items()):
+            t = max(trackers[tracker_address]["time_added"],
+                    trackers[tracker_address]["time_success"])
+            if tracker_address not in supported_trackers and t < time.time() - self.tracker_down_time_interval:
+                self.log.debug("Tracker %s looks unused, removing." % tracker_address)
+                del trackers[tracker_address]
+
         protocols = set()
         for tracker_address in supported_trackers:
             protocol = self.getNormalizedTrackerProtocol(tracker_address)
@@ -135,11 +147,16 @@ class TrackerStorage(object):
             # There may be network connectivity issues.
             return
 
-        if len(self.getWorkingTrackers()) >= config.working_shared_trackers_limit:
-            error_limit = 5
-        else:
-            error_limit = 30
-        error_limit
+        protocol = self.getNormalizedTrackerProtocol(tracker_address) or ""
+
+        nr_working_trackers_for_protocol = len(self.getTrackersPerProtocol(working_only=True).get(protocol, []))
+        nr_working_trackers = len(self.getWorkingTrackers())
+
+        error_limit = 30
+        if nr_working_trackers_for_protocol >= config.working_shared_trackers_limit_per_protocol:
+            error_limit = 10
+            if nr_working_trackers >= config.working_shared_trackers_limit:
+                error_limit = 5
 
         if trackers[tracker_address]["num_error"] > error_limit and trackers[tracker_address]["time_success"] < time.time() - self.tracker_down_time_interval:
             self.log.debug("Tracker %s looks down, removing." % tracker_address)
@@ -249,6 +266,8 @@ class TrackerStorage(object):
                 continue
 
             num_success += 1
+
+            random.shuffle(res["trackers"])
             for tracker_address in res["trackers"]:
                 if type(tracker_address) is bytes:  # Backward compatibilitys
                     tracker_address = tracker_address.decode("utf8")
@@ -299,6 +318,7 @@ class SiteAnnouncerPlugin(object):
 class FileRequestPlugin(object):
     def actionGetTrackers(self, params):
         shared_trackers = list(tracker_storage.getWorkingTrackers("shared").keys())
+        random.shuffle(shared_trackers)
         self.response({"trackers": shared_trackers})
 
 
