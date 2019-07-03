@@ -18,6 +18,7 @@ class TrackerStorage(object):
 
         self.working_tracker_time_interval = 60 * 60
         self.tracker_down_time_interval = 60 * 60
+        self.tracker_discover_time_interval = 5 * 60
 
         self.file_path = "%s/trackers.json" % config.data_dir
         self.load()
@@ -73,14 +74,14 @@ class TrackerStorage(object):
 
         supported_trackers = self.site_announcer.getSupportedTrackers()
 
-        protocols = {}
+        protocols = set()
         for tracker_address in supported_trackers:
             protocol = self.getNormalizedTrackerProtocol(tracker_address)
             if not protocol:
                 continue
-            protocols[protocol] = True
+            protocols.add(protocol)
 
-        protocols = list(protocols.keys())
+        protocols = list(protocols)
 
         self.log.debug("Supported tracker protocols: %s" % protocols)
 
@@ -232,8 +233,11 @@ class TrackerStorage(object):
         return True
 
     def discoverTrackers(self, peers):
-        if not self.enoughWorkingTrackers(type="shared"):
+        if self.enoughWorkingTrackers(type="shared"):
             return False
+
+        self.log.debug("Discovering trackers from %s peers..." % len(peers))
+
         s = time.time()
         num_success = 0
         for peer in peers:
@@ -269,7 +273,7 @@ if "tracker_storage" not in locals():
 class SiteAnnouncerPlugin(object):
     def getTrackers(self):
         tracker_storage.setSiteAnnouncer(self)
-        if tracker_storage.time_discover < time.time() - 5 * 60:
+        if tracker_storage.time_discover < time.time() - tracker_storage.tracker_discover_time_interval:
             tracker_storage.time_discover = time.time()
             gevent.spawn(tracker_storage.discoverTrackers, self.site.getConnectedPeers())
         trackers = super(SiteAnnouncerPlugin, self).getTrackers()
@@ -313,7 +317,7 @@ class FileServerPlugin(object):
 class ConfigPlugin(object):
     def createArguments(self):
         group = self.parser.add_argument_group("AnnounceShare plugin")
-        group.add_argument('--working_shared_trackers_limit', help='Stop discovering new shared trackers after this number of shared trackers reached (total)', default=5, type=int, metavar='limit')
-        group.add_argument('--working_shared_trackers_limit_per_protocol', help='Stop discovering new shared trackers after this number of shared trackers reached per each supported protocol', default=3, type=int, metavar='limit')
+        group.add_argument('--working_shared_trackers_limit', help='Stop discovering new shared trackers after this number of shared trackers reached (total)', default=10, type=int, metavar='limit')
+        group.add_argument('--working_shared_trackers_limit_per_protocol', help='Stop discovering new shared trackers after this number of shared trackers reached per each supported protocol', default=5, type=int, metavar='limit')
 
         return super(ConfigPlugin, self).createArguments()
